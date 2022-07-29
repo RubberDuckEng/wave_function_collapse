@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'dart:math' as math;
+import 'dart:math';
 import 'dart:io';
 import 'dart:ui' as ui;
 
@@ -17,26 +17,134 @@ void main() {
 // }
 
 class Possibilites {
-  List<bool> storage;
+  late Set<OrientedTile> possibleTiles;
 
-  Possibilites(int count) : storage = List.filled(count, true);
-
-  void ruleOut(int index) {
-    storage[index] = false;
+  Possibilites(int tileCount) {
+    for (int i = 0; i < tileCount; i++) {
+      for (final orientation in Orientation.values) {
+        possibleTiles.add(OrientedTile(i, orientation));
+      }
+    }
   }
+
+  bool get isImpossible => possibleTiles.isEmpty;
+  bool get isResolved => possibleTiles.length == 1;
+
+  OrientedTile get resovledTile {
+    assert(isResolved);
+    return possibleTiles.first;
+  }
+
+  void ruleOut(OrientedTile tile) {
+    possibleTiles.remove(tile);
+  }
+
+  void resolveTo(OrientedTile tile) {
+    assert(possibleTiles.contains(tile));
+    possibleTiles.clear();
+    possibleTiles.add(tile);
+  }
+
+  OrientedTile getRandom(Random random) {
+    assert(!isImpossible);
+    final index = random.nextInt(possibleTiles.length);
+    return possibleTiles.elementAt(index);
+  }
+}
+
+class Location {
+  final int x;
+  final int y;
+  const Location(this.x, this.y);
+
+  @override
+  bool operator ==(other) => other is Location && x == other.x && y == other.y;
+
+  @override
+  int get hashCode => Object.hash(x.hashCode, y.hashCode);
 }
 
 class Wave {
   final List<List<Possibilites>> _possibleTiles;
+  final Random _random = Random();
 
   Wave.unobserved(int width, int height, TileStore tileStore)
       : _possibleTiles = List.generate(
           height,
           (int y) => List.generate(
             width,
-            (int x) => Possibilites(tileStore.tileCount),
+            (int x) =>
+                Possibilites(tileStore.tileCount * Orientation.values.length),
           ),
         );
+
+  int get width => _possibleTiles[0].length;
+  int get height => _possibleTiles.length;
+
+  Possibilites getAt(Location location) {
+    return _possibleTiles[location.y][location.x];
+  }
+
+  void constrainNeighbors(Location location) {}
+
+  Location? getMaximalityConstrainedPosition() {}
+
+  TileMap collapse() {
+    // Pick a random tile and collapse it.
+    var target = getMaximalityConstrainedPosition();
+    while (target != null) {
+      final possibilites = getAt(target);
+      final actualTile = possibilites.getRandom(_random);
+      possibilites.resolveTo(actualTile);
+      constrainNeighbors(target);
+      // Then, while we still have tiles to collapse, pick a maximally
+      // constrainted location, and collapse.
+      target = getMaximalityConstrainedPosition();
+      // If the location has no possibilities, give up?
+      if (target != null && getAt(target).isImpossible) {
+        throw "fail";
+      }
+      // Repeat until we have no more tiles to collapse.
+    }
+    return TileMap.fromTiles(_possibleTiles
+        .map((row) => row.map((p) => p.resovledTile).toList())
+        .toList());
+  }
+}
+
+enum Orientation {
+  rotated0,
+  rotated90,
+  rotated180,
+  rotated270,
+  reflected0,
+  reflected90,
+  reflected180,
+  reflected270,
+}
+
+class OrientedTile {
+  final int id;
+  final Orientation orientation;
+
+  OrientedTile(this.id, this.orientation);
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is OrientedTile &&
+          runtimeType == other.runtimeType &&
+          id == other.id &&
+          orientation == other.orientation;
+
+  @override
+  int get hashCode => Object.hash(id, orientation);
+}
+
+class NeighborOracle {
+  bool canBeAdjacent(OrientedTile left, OrientedTile right) {
+    return true;
+  }
 }
 
 class TileStore {
@@ -59,7 +167,7 @@ class TileStore {
       tileNames.add(name);
       tileImages.add(await loadImage(name));
     }
-    // for (var element in xml.findAllElements('neighor')) {
+    // for (var element in xml.findAllElements('neighbor')) {
     //   final left = element.getAttribute('left')!;
     //   final right = element.getAttribute('right')!;
     // }
@@ -78,27 +186,31 @@ class TileStore {
 }
 
 class TileMap {
-  final List<List<int>> _tiles;
+  final List<List<OrientedTile>> _tiles;
 
   int get width => _tiles[0].length;
   int get height => _tiles.length;
 
   TileMap(int width, int height)
-      : _tiles = List<List<int>>.generate(height, (int y) {
-          return List<int>.filled(width, 0);
+      : _tiles = List<List<OrientedTile>>.generate(height, (int y) {
+          return List<OrientedTile>.filled(
+              width, OrientedTile(0, Orientation.rotated0));
         });
 
   TileMap.fromTiles(this._tiles);
 
   factory TileMap.random(int width, int height, int tileCount) {
-    return TileMap.fromTiles(List<List<int>>.generate(height, (int y) {
-      return List<int>.generate(width, (int x) {
-        return math.Random().nextInt(tileCount);
+    return TileMap.fromTiles(List<List<OrientedTile>>.generate(height, (int y) {
+      return List<OrientedTile>.generate(width, (int x) {
+        return OrientedTile(
+          Random().nextInt(tileCount),
+          Orientation.values[Random().nextInt(Orientation.values.length)],
+        );
       });
     }));
   }
 
-  int getTileIndex(int x, int y) => _tiles[y][x];
+  OrientedTile getTileIndex(int x, int y) => _tiles[y][x];
 }
 
 class MyApp extends StatefulWidget {
@@ -153,6 +265,37 @@ class TilePainter extends CustomPainter {
 
   TilePainter({required this.tileMap, required this.tileStore});
 
+  void applyTransform(Canvas canvas, Orientation orientation) {
+    switch (orientation) {
+      case Orientation.rotated0:
+        break;
+      case Orientation.rotated90:
+        canvas.rotate(pi / 2);
+        break;
+      case Orientation.rotated180:
+        canvas.rotate(pi);
+        break;
+      case Orientation.rotated270:
+        canvas.rotate(-pi / 2);
+        break;
+      case Orientation.reflected0:
+        canvas.scale(-1, 1);
+        break;
+      case Orientation.reflected90:
+        canvas.rotate(pi / 2);
+        canvas.scale(-1, 1);
+        break;
+      case Orientation.reflected180:
+        canvas.rotate(pi);
+        canvas.scale(-1, 1);
+        break;
+      case Orientation.reflected270:
+        canvas.rotate(-pi / 2);
+        canvas.scale(-1, 1);
+        break;
+    }
+  }
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()..isAntiAlias = false;
@@ -160,20 +303,20 @@ class TilePainter extends CustomPainter {
     final tileHeight = size.width / tileMap.width;
     for (int x = 0; x < tileMap.width; x++) {
       for (int y = 0; y < tileMap.height; y++) {
-        final index = tileMap.getTileIndex(x, y);
-        final tile = tileStore.getTileByIndex(index);
-        final rect = Rect.fromLTWH(
-          x * tileWidth,
-          y * tileHeight,
-          tileWidth,
-          tileHeight,
-        );
+        final orientedTile = tileMap.getTileIndex(x, y);
+        final tile = tileStore.getTileByIndex(orientedTile.id);
+        final rect = Rect.fromLTWH(0, 0, tileWidth, tileHeight);
+        canvas.save();
+        canvas.translate((x + 0.5) * tileWidth, (y + 0.5) * tileHeight);
+        applyTransform(canvas, orientedTile.orientation);
+        canvas.translate(-0.5 * tileWidth, -0.5 * tileHeight);
         canvas.drawImageRect(
           tile,
           Rect.fromLTWH(0, 0, tile.width.toDouble(), tile.height.toDouble()),
           rect,
           paint,
         );
+        canvas.restore();
       }
     }
   }
