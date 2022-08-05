@@ -10,11 +10,11 @@ void main() {
   runApp(const MyApp());
 }
 
-// class Neighbor {
-//   final String left;
-//   final String right;
-//   const Neighbor(this.left, this.right);
-// }
+class AllowedAdjacency {
+  final OrientedTile left;
+  final OrientedTile right;
+  const AllowedAdjacency(this.left, this.right);
+}
 
 class Possibilites {
   late Set<OrientedTile> possibleTiles;
@@ -26,6 +26,8 @@ class Possibilites {
       }
     }
   }
+
+  int get count => possibleTiles.length;
 
   bool get isImpossible => possibleTiles.isEmpty;
   bool get isResolved => possibleTiles.length == 1;
@@ -50,6 +52,27 @@ class Possibilites {
     final index = random.nextInt(possibleTiles.length);
     return possibleTiles.elementAt(index);
   }
+
+  bool isValidNeighborTile(
+    NeighborOracle oracle,
+    Relationship relationship,
+    OrientedTile neighborTile,
+  ) {
+    for (final tile in possibleTiles) {
+      if (relationship.isHorizontal) {
+        if (oracle.isValidLeftRight(relationship.left(tile, neighborTile),
+            relationship.right(tile, neighborTile))) {
+          return true;
+        }
+      } else if (relationship.isVertical) {
+        if (oracle.isValidTopBottom(relationship.top(tile, neighborTile),
+            relationship.bottom(tile, neighborTile))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
 }
 
 class Location {
@@ -64,9 +87,42 @@ class Location {
   int get hashCode => Object.hash(x.hashCode, y.hashCode);
 }
 
+class Relationship {
+  final Location first;
+  final Location second;
+  const Relationship(this.first, this.second);
+
+  int get dx => first.x - second.x;
+  int get dy => first.y - second.y;
+
+  bool get isHorizontal => dy == 0;
+  bool get isVertical => dx == 0;
+
+  T left<T>(T firstData, T secondData) {
+    assert(isHorizontal);
+    return dx > 0 ? firstData : secondData;
+  }
+
+  T right<T>(T firstData, T secondData) {
+    assert(isHorizontal);
+    return dx > 0 ? secondData : firstData;
+  }
+
+  T top<T>(T firstData, T secondData) {
+    assert(isVertical);
+    return dy > 0 ? firstData : secondData;
+  }
+
+  T bottom<T>(T firstData, T secondData) {
+    assert(isVertical);
+    return dy > 0 ? secondData : firstData;
+  }
+}
+
 class Wave {
   final List<List<Possibilites>> _possibleTiles;
   final Random _random = Random();
+  final NeighborOracle _neighborOracle = NeighborOracle();
 
   Wave.unobserved(int width, int height, TileStore tileStore)
       : _possibleTiles = List.generate(
@@ -85,9 +141,75 @@ class Wave {
     return _possibleTiles[location.y][location.x];
   }
 
-  void constrainNeighbors(Location location) {}
+  Iterable<Location> getNeighbors(Location location) sync* {
+    for (int dy = -1; dy <= 1; dy++) {
+      for (int dx = -1; dx <= 1; dx++) {
+        if (dx == 0 || dy == 0) {
+          continue;
+        }
+        final x = location.x + dx;
+        final y = location.y + dy;
+        if (x >= 0 && x < width && y >= 0 && y < height) {
+          yield Location(x, y);
+        }
+      }
+    }
+  }
 
-  Location? getMaximalityConstrainedPosition() {}
+  Iterable<Location> getUnresolvedNeighbors(Location location) sync* {
+    for (final neighbor in getNeighbors(location)) {
+      if (!getAt(neighbor).isResolved) {
+        yield neighbor;
+      }
+    }
+  }
+
+  void constrainNeighbors(Location location) {
+    Set<Location> modified = {};
+    modified.add(location);
+    while (modified.isNotEmpty) {
+      final location = modified.first;
+      modified.remove(location);
+      final possibilities = getAt(location);
+
+      // We changed, let all of our neighbors know so that they can confirm
+      // their possibilities are still valid.
+      for (final neighbor in getNeighbors(location)) {
+        final relationship = Relationship(location, neighbor);
+        final neighborPossibilities = getAt(neighbor);
+        for (final neighborTile in neighborPossibilities.possibleTiles) {
+          if (!possibilities.isValidNeighborTile(
+              _neighborOracle, relationship, neighborTile)) {
+            neighborPossibilities.ruleOut(neighborTile);
+            modified.add(neighbor);
+          }
+        }
+      }
+    }
+  }
+
+  Location? getMaximalityConstrainedPosition() {
+    List<Location> bestLocations = [];
+    int? bestCount;
+    for (int y = 0; y < height; ++y) {
+      for (int x = 0; x < width; ++x) {
+        var possibilites = getAt(Location(x, y));
+        if (bestLocations.isEmpty) {
+          bestLocations.add(Location(x, y));
+          bestCount = possibilites.count;
+        } else if (possibilites.count == bestCount) {
+          bestLocations.add(Location(x, y));
+        } else if (possibilites.count < bestCount!) {
+          bestLocations = [Location(x, y)];
+          bestCount = possibilites.count;
+        }
+      }
+    }
+    if (bestLocations.isEmpty) {
+      return null;
+    }
+    return bestLocations.elementAt(_random.nextInt(bestLocations.length));
+  }
 
   TileMap collapse() {
     // Pick a random tile and collapse it.
@@ -142,8 +264,21 @@ class OrientedTile {
 }
 
 class NeighborOracle {
-  bool canBeAdjacent(OrientedTile left, OrientedTile right) {
+  final List<AllowedAdjacency> _adjacencies = [];
+
+  void addValidLeftRight(OrientedTile left, OrientedTile right) {
+    _adjacencies.add(AllowedAdjacency(left, right, true));
+  }
+
+  bool isValidLeftRight(OrientedTile left, OrientedTile right) {
+    // Convert this into a left/right problem?
+    // validate against known allowed relationships.
     return true;
+  }
+
+  bool isValidTopBottom(OrientedTile top, OrientedTile bottom) {
+    // Rotate both tiles to their left-right forms and check?
+    return false;
   }
 }
 
@@ -157,6 +292,22 @@ class TileStore {
 
   int get tileCount => tileNames.length;
 
+  int getTileIdByName(String name) => tileNames.indexOf(name);
+
+  OrientedTile orientedTileByName(String descriptor) {
+    List<String> parts = descriptor.split(' ');
+    if (parts.length == 1) {
+      return OrientedTile(getTileIdByName(parts[0]), Orientation.rotated0);
+    }
+    if (parts.length == 2) {
+      final name = parts[0];
+      final orientationIndex = int.parse(parts[1]);
+      return OrientedTile(
+          getTileIdByName(name), Orientation.values[orientationIndex]);
+    }
+    throw "invalid tile descriptor";
+  }
+
   Future<void> loadTiles() async {
     // ../WaveFunctionCollapse/tilesets/catalog.xml
     final path = p.join(tilesetsPath, '$name.xml');
@@ -166,11 +317,20 @@ class TileStore {
       final name = element.getAttribute('name')!;
       tileNames.add(name);
       tileImages.add(await loadImage(name));
+      // TODO: Record symmetries.
     }
-    // for (var element in xml.findAllElements('neighbor')) {
-    //   final left = element.getAttribute('left')!;
-    //   final right = element.getAttribute('right')!;
-    // }
+    final oracle = NeighborOracle();
+    // 		<neighbor left="bridge" right="bridge"/>
+    // 		<neighbor left="bridge 1" right="bridge 1"/>
+    // 		<neighbor left="bridge 1" right="connection 1"/>
+    // 		<neighbor left="bridge 1" right="t 2"/>
+    // 		<neighbor left="bridge 1" right="t 3"/>
+    // 		<neighbor left="bridge 1" right="track 1"/>
+    for (var element in xml.findAllElements('neighbor')) {
+      final leftTile = orientedTileByName(element.getAttribute('left')!);
+      final rightTile = orientedTileByName(element.getAttribute('right')!);
+      oracle.addValidLeftRight(leftTile, rightTile);
+    }
   }
 
   ui.Image getTileByIndex(int index) => tileImages[index];
